@@ -1,0 +1,80 @@
+name: Terraform Workflow
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  terraform:
+    name: Apply Terraform
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.3.0
+
+      - name: Build Lambda Package
+        run: bash lambda/build_lambda.sh
+
+      - name: Create or Ensure S3 Bucket and DynamoDB Table
+        run: |
+          BUCKET_NAME="terraform-url-shortener-state"
+          DYNAMODB_TABLE="terraform-locks"
+          
+          # Check if the S3 bucket exists
+          if ! aws s3api head-bucket --bucket $BUCKET_NAME --region eu-west-2 2>/dev/null; then
+            echo "S3 bucket $BUCKET_NAME does not exist. Creating..."
+            aws s3 mb s3://$BUCKET_NAME --region eu-west-2
+          else
+            echo "S3 bucket $BUCKET_NAME already exists."
+          fi
+          
+          # Check if the DynamoDB table exists
+          if aws dynamodb describe-table --table-name $DYNAMODB_TABLE --region eu-west-2 2>/dev/null; then
+            echo "DynamoDB table $DYNAMODB_TABLE already exists."
+          else
+            echo "DynamoDB table $DYNAMODB_TABLE does not exist. Creating..."
+            
+            # Create DynamoDB table, but skip if ResourceInUseException is encountered
+            create_table_output=$(aws dynamodb create-table \
+              --table-name $DYNAMODB_TABLE \
+              --attribute-definitions AttributeName=LockID,AttributeType=S \
+              --key-schema AttributeName=LockID,KeyType=HASH \
+              --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
+              --region eu-west-2 2>&1)
+            
+            if echo "$create_table_output" | grep -q "ResourceInUseException"; then
+              echo "DynamoDB table creation skipped due to ResourceInUseException: Table is being created or updated."
+            else
+              echo "DynamoDB table $DYNAMODB_TABLE created successfully."
+            fi
+          fi
+        continue-on-error: true
+
+      - name: Initialize Terraform
+        run: terraform -chdir=terraform init -backend-config="bucket=terraform-url-shortener-state" -backend-config="key=url-shortener/terraform.tfstate" -backend-config="region=eu-west-2" -backend-config="dynamodb_table=terraform-locks" -backend-config="encrypt=true"
+
+
+      - name: Validate Terraform
+        run: terraform -chdir=terraform validate
+
+      - name: Plan Terraform
+        run: terraform -chdir=terraform plan
+
+
+      - name: Apply Terraform
+        if: github.ref == 'refs/heads/master'
+        run: terraform -chdir=terraform apply -auto-approve
