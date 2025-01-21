@@ -137,6 +137,9 @@ curl -X GET "<API_GATEWAY_URL>/shortener?short_url=abc123"   # Replace API Gatew
    - Package and deploy the Lambda function.
    - Output the API Gateway URL.
 
+Once any changes are made in the repostiroy with respect to master branch and commited, then Github action feature will automatically trigger the pipeline to provision the resources and deploy the application.
+![image](https://github.com/user-attachments/assets/ede498e4-fcfb-4f65-ab34-65cae3694ad5)
+
 
 
 # Security Measures considered
